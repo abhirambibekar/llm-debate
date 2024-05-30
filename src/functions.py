@@ -1,16 +1,18 @@
 from uuid import UUID, uuid4
 
-from api import LLMMessage, llm_api_call
+from api import llm_api_call
 from data_structures import (
     MODEL_IDS,
     RESPONSE_LENGHTHS_TO_VALUE_MAP,
     RESPONSE_LENGTHS,
     ArgumentClassificationResponse,
+    BaselineArgumentClassificationResponse,
     MMLUMathQuestion,
     SelectedOptionArgumentResponse,
     TwoOptionDebateResponse,
     ZeroShotFourOptionResponse,
     ZeroShotTwoOptionResponse,
+    generate_labelled_options,
 )
 
 
@@ -19,13 +21,10 @@ def generate_zero_shot_four_option_response(
     question: MMLUMathQuestion,
 ) -> ZeroShotFourOptionResponse:
     prompt = f"""
-    You are a student in a college mathematics course.
-    Answer the following multiple choice question.
-
+    Answer the following multiple choice college mathematics question.
+    
     Question: {question.content}
-    Options: {question.labelled_options}
-
-    ONLY respond with the letter of the correct option.
+    {generate_labelled_options(question.options)}
     """
 
     response = llm_api_call(
@@ -76,6 +75,31 @@ def generate_arguments_for_question_options(
     return arguments
 
 
+def baseline_classify_argument(
+    model_id: MODEL_IDS,
+    question: MMLUMathQuestion,
+    selected_option_index: int,
+) -> BaselineArgumentClassificationResponse:
+    option = question.options[selected_option_index]
+
+    prompt = f"""
+    For the given question, mark the answer as as either correct or incorrect:
+    
+    Question: {question.content}
+    Answer: {option}
+    """
+    classification = llm_api_call(
+        model_id=model_id, messages=[{"role": "user", "content": prompt}]
+    )
+    return BaselineArgumentClassificationResponse(
+        id=uuid4(),
+        question_id=question.id,
+        selected_option_index=selected_option_index,
+        model_id=model_id,
+        classification=classification,
+    )
+
+
 def classify_argument(
     model_id: MODEL_IDS,
     question: MMLUMathQuestion,
@@ -83,33 +107,20 @@ def classify_argument(
 ) -> ArgumentClassificationResponse:
     option = question.options[argument.selected_option_index]
 
-    first_prompt = f"""
-    You are a college mathematics professor grading an exam.
-    Classify the following argument as either correct or incorrect:
+    prompt = f"""
+    For the given question, mark the answer as as either correct or incorrect:
     
-    Answer: {option}
-    Explanation: {argument.argument}
-
-    ONLY respond with "correct" or "incorrect".
+    Question: {question.content}
+    Answer: {option} -> {argument.argument}
     """
-    first_round_messages: list[LLMMessage] = [{"role": "user", "content": first_prompt}]
-    classification = llm_api_call(model_id=model_id, messages=first_round_messages)
-
-    second_prompt = """Provide a brief explanation for why the student's explanation is correct or incorrect."""
-    second_round_messages: list[LLMMessage] = first_round_messages + [
-        {"role": "assistant", "content": classification},
-        {"role": "user", "content": second_prompt},
-    ]
-    classification_explanation = llm_api_call(
-        model_id=model_id,
-        messages=second_round_messages,
+    classification = llm_api_call(
+        model_id=model_id, messages=[{"role": "user", "content": prompt}]
     )
     return ArgumentClassificationResponse(
         id=uuid4(),
         argument_id=argument.id,
         model_id=model_id,
         classification=classification,
-        classification_explanation=classification_explanation,
     )
 
 
@@ -127,15 +138,15 @@ def generate_zero_shot_two_option_responses(
         ("correct_first", correct_first_option_indices),
         ("incorrect_first", list(reversed(correct_first_option_indices))),
     ]:
+        ordered_options = [
+            question.options[first_option_index],
+            question.options[second_option_index],
+        ]
         prompt = f"""
-        You are a student in a college mathematics course.
-        Answer the following two-choice question:
+        Answer the following multiple choice college mathematics question.
 
         Question: {question.content}
-        Option A: {question.options[first_option_index]}
-        Option B: {question.options[second_option_index]}
-
-        ONLY respond with the letter of the correct option.
+        {generate_labelled_options(ordered_options)}
         """
         response = llm_api_call(
             model_id=model_id,
@@ -269,14 +280,11 @@ def generate_two_option_debate_responses(
         ("incorrect_first", list(reversed(correct_first_option_indices))),
     ]:
         prompt = f"""
-        You are a student in a college mathematics course.
-        Answer the following two-choice question:
+        Answer the following multiple choice college mathematics question.
 
         Question: {question.content}
-        Option A: {question.options[first_option_index]} -> {arguments_by_option_index[first_option_index].argument}
-        Option B: {question.options[second_option_index]} -> {arguments_by_option_index[second_option_index].argument}
-
-        ONLY respond with the letter of the correct option.
+        Choice A: {question.options[first_option_index]} -> {arguments_by_option_index[first_option_index].argument}
+        Choice B: {question.options[second_option_index]} -> {arguments_by_option_index[second_option_index].argument}
         """
         response = llm_api_call(
             model_id=model_id,
